@@ -1,9 +1,13 @@
 import React from 'react';
 import './App.css';
 import loadedMap from './map.json';
+import Matrix from './lib/matrix.js';
+import NeuralNetwork from './lib/nn.js';
 
 const WIDTH = 1000;
 const HEIGHT = 600;
+const POPULATION = 150;
+var SHOW_SENSORS = true;
 let Map = [];
 
 class Sensor {
@@ -47,20 +51,23 @@ class Sensor {
         x2: _x2,
         y2: _y2
       },
-      {
-        x1:element.x1,
-        y1:element.y1,
-        x2:element.x2,
-        y2:element.y2
-      });
+        {
+          x1: element.x1,
+          y1: element.y1,
+          x2: element.x2,
+          y2: element.y2
+        });
 
       if (point != null) {
         //print
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, 10, 0, 2 * Math.PI);
-        ctx.fillStyle = "#0F0";
-        ctx.fill();
-        
+        if(SHOW_SENSORS)
+        {
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 10, 0, 2 * Math.PI);
+          ctx.fillStyle = "#0F0";
+          ctx.fill();
+        }
+
         minLength.push(Math.sqrt(Math.pow(point.x - _x1, 2) + Math.pow(point.y - _y1, 2)));
       }
       else {
@@ -68,10 +75,8 @@ class Sensor {
       }
     });
 
-    for(let value of minLength)
-    {
-      if(value != 99999)
-      {
+    for (let value of minLength) {
+      if (value != 99999) {
         this.data = Math.min(...minLength);
         break;
       }
@@ -81,7 +86,7 @@ class Sensor {
 
 
     // console.log(this.data);
-    }
+  }
 
   getIntersectionPointOfTwoLines = (lineA, lineB) => {
     var x1 = lineA.x1;
@@ -113,15 +118,16 @@ class Sensor {
 }
 
 class Car {
-  constructor(ctx) {
+  constructor(ctx, driver) {
     this.ctx = ctx;
-    this.x = 500;
-    this.y = 300;
+    this.x = 250;
+    this.y = 530;
     this.width = 30;
     this.height = 15;
     this.steeringSensivity = 5;
-    this.angle = 270;
+    this.angle = 0;
     this.speed = 5;
+    this.isCollusion = false;
 
     let centerX = this.x + this.width / 2;
     let centerY = this.y + this.height / 2;
@@ -129,6 +135,39 @@ class Car {
     this.sensors.push(new Sensor(ctx, centerX, this.y, 100));
     this.sensors.push(new Sensor(ctx, centerX, centerY, 100));
     this.sensors.push(new Sensor(ctx, centerX, centerY, 100));
+
+
+    if (driver instanceof NeuralNetwork) {
+      
+      var randomGaussian = 0;
+      var rand = 0;
+
+      for (var i = 0; i < 6; i += 1) {
+        rand += Math.random();
+      }
+
+      randomGaussian = rand / 6;
+
+      this.driver = driver.copy();
+      this.driver.mutate(x => {
+        if (Math.random(1) < 0.1) {
+          let offset = randomGaussian * 0.5;
+          let newx = x + offset;
+          return newx;
+        } else {
+          return x;
+        }
+      });
+    } else 
+    {
+      this.driver = new NeuralNetwork(4, 8, 2);
+    }
+    this.score = 0;
+    this.fitness = 0;
+  }
+
+  copy = () => {
+    return new Car(this.ctx, this.driver);
   }
 
   draw = () => {
@@ -146,9 +185,12 @@ class Car {
     //!---Draw car---
 
     //---Draw sensors and detect collusion---
-    this.sensors[0].draw(this.angle * Math.PI / 180);
-    this.sensors[1].draw((this.angle + 90) * Math.PI / 180);
-    this.sensors[2].draw((this.angle - 90) * Math.PI / 180);
+    if(SHOW_SENSORS)
+    {
+      this.sensors[0].draw(this.angle * Math.PI / 180);
+      this.sensors[1].draw((this.angle + 90) * Math.PI / 180);
+      this.sensors[2].draw((this.angle - 90) * Math.PI / 180);
+    }
 
     this.sensors.forEach((sensor) => sensor.update(this));
 
@@ -187,6 +229,35 @@ class Car {
     this.x -= this.speed * Math.cos(this.angle * Math.PI / 180);
     this.y -= this.speed * Math.sin(this.angle * Math.PI / 180);
   }
+
+  drive() {
+    var inputs = [];
+    inputs[0] = this.sensors[0].data;
+    inputs[1] = this.sensors[1].data;
+    inputs[2] = this.sensors[2].data;
+    inputs[3] = this.angle;
+
+    let action = this.driver.predict(inputs);
+
+    // if (action[0] > action[1] && action[0] > action[2]) {
+    //   this.forward();
+    // }
+    // else if (action[1] > action[0] && action[1] > action[2]) {
+    //   this.steerLeft();
+    // }
+    // else if (action[2] > action[0] && action[2] > action[1]) {
+    //   this.steerRight();
+    // }
+    this.forward();
+    if(action[0] > action[1])
+    {
+      this.steerRight();
+    }
+    else
+    {
+      this.steerLeft();
+    }
+  }
 }
 
 class App extends React.Component {
@@ -210,29 +281,51 @@ class App extends React.Component {
 
     ctx.clearRect(0, 0, 1000, 600);
     this.draw();
-    this.detectCollusion(this.car);
+    this.cars.forEach(car => {
+      if (this.detectCollusion(car)) {
+        car.isCollusion = true;
+      }
+    });
+
+    this.cars.forEach(car => {
+      if(car.isCollusion == false)
+      {
+        car.drive();
+        car.score++;
+      }
+    });
+
+    //isFinish ?
+    var filter = this.cars.filter(x=>x.isCollusion == true);
+    if(filter.length == POPULATION)
+      this.nextGeneration(this.cars);
+
 
     if (this.keyW) {
-      this.car.forward();
+      // this.cars[0].forward();
     }
     if (this.keyA) {
-      this.car.steerLeft();
+      this.cars[0].steerLeft();
     }
     if (this.keyD) {
-      this.car.steerRight();
+      this.cars[0].steerRight();
     }
     if (this.keyS) {
-      this.car.backward();
+      this.cars[0].backward();
     }
 
   }
 
   componentDidMount() {
     var ctx = this.canvas.current.getContext("2d");
-    this.car = new Car(ctx);
+    this.cars = [];
+    for (let i = 0; i < POPULATION; i++)
+      this.cars.push(new Car(ctx));
+
     this.timer = setInterval(this.gameLoop, 1000 / this.fps);
-    this.mouseDownLocation = {x:0,y:0};
-    this.mouseUpLocation = {x:0,y:0};
+    this.mouseDownLocation = { x: 0, y: 0 };
+    this.mouseUpLocation = { x: 0, y: 0 };
+    this.loadMap();
     // this.sensors = [];
   }
 
@@ -263,6 +356,10 @@ class App extends React.Component {
       if (this.fps <= 0)
         this.fps = 60;
       this.timer = setInterval(this.gameLoop, 1000 / this.fps);
+    }//space
+    else if (e.keyCode == 32)
+    {
+      SHOW_SENSORS = !SHOW_SENSORS;
     }
   }
 
@@ -282,59 +379,47 @@ class App extends React.Component {
   }
 
   detectCollusion = (car) => {
-    var checkCollusion = new Sensor(null,null,null,null);
-    var top,bot,left,right;
-    for(let element of Map) {
+    var checkCollusion = new Sensor(null, null, null, null);
+    var top, bot, left, right;
+    for (let element of Map) {
       top = checkCollusion.getIntersectionPointOfTwoLines({
         x1: car.x,
         y1: car.y,
         x2: car.x + car.width,
         y2: car.y
       },
-      element);
+        element);
 
       bot = checkCollusion.getIntersectionPointOfTwoLines({
         x1: car.x,
         y1: car.y + car.height,
         x2: car.x + car.width,
         y2: car.y + car.height
-      },element);
+      }, element);
 
       left = checkCollusion.getIntersectionPointOfTwoLines({
         x1: car.x,
         y1: car.y,
         x2: car.x,
         y2: car.y + car.height
-      },element);
+      }, element);
 
       right = checkCollusion.getIntersectionPointOfTwoLines({
         x1: car.x + car.width,
         y1: car.y,
         x2: car.x + car.width,
         y2: car.y + car.height
-      },element);
+      }, element);
 
-      if(top != null || bot != null || left != null || right != null)
-      {
-        console.log("true");
-        break;
+      if (top != null || bot != null || left != null || right != null) {
+        return true;
       }
-      
-    };
-
-    // this.map.forEach((element) => {
-    //   if (element.x < car.x + car.width &&
-    //     element.x + element.w > car.x &&
-    //     element.y < car.y + car.height &&
-    //     element.y + element.h > car.y) {
-    //     console.log("true");
-    //     car.backward();
-    //   }
-    // });
+    }
+    return false;
   }
 
   draw() {
-    this.car.draw();
+    this.cars.forEach(car => car.isCollusion ? 1 : car.draw());
     this.drawMap();
   }
 
@@ -342,14 +427,80 @@ class App extends React.Component {
     var ctx = this.canvas.current.getContext("2d");
     Map.forEach((element) => {
       ctx.beginPath();
-      ctx.moveTo(element.x1,element.y1);
-      ctx.lineTo(element.x2,element.y2);
+      ctx.moveTo(element.x1, element.y1);
+      ctx.lineTo(element.x2, element.y2);
       ctx.lineWidth = this.lineWidth;
       ctx.stroke();
       ctx.lineWidth = 1;
     });
 
   }
+  //--------------------GeneticAlgorithm-----------------------//
+
+  nextGeneration = (cars) => {
+    this.normalizeFitness(cars);
+    // console.log("fit");
+    this.cars = [];
+    this.cars = this.generate(cars);
+  }
+
+
+  generate = (oldCars) => {
+    let newCars = [];
+    for (let i = 0; i < oldCars.length; i++) {
+      // Select a car based on fitness
+      let car = this.poolSelection(oldCars);
+      newCars[i] = car;
+    }
+    return newCars;
+  }
+
+  normalizeFitness = (cars) => {
+    // Make score exponentially better?
+    for (let i = 0; i < cars.length; i++) {
+      cars[i].score = Math.pow(cars[i].score, 2);
+    }
+
+    // Add up all the scores
+    let sum = 0;
+    for (let i = 0; i < cars.length; i++) {
+      sum += cars[i].score;
+    }
+    // Divide by the sum
+    for (let i = 0; i < cars.length; i++) {
+      cars[i].fitness = cars[i].score / sum;
+    }
+    // console.log("fitness");
+    // console.log(cars);
+  }
+
+  poolSelection = (cars) => {
+    // Start at 0
+    let index = 0;
+
+    // Pick a random number between 0 and 1
+    let r = Math.random(1);
+
+    // Keep subtracting probabilities until you get less than zero
+    // Higher probabilities will be more likely to be fixed since they will
+    // subtract a larger number towards zero
+    while (r > 0) {
+      r -= cars[index].fitness;
+      // And move on to the next
+      index += 1;
+    }
+
+    // Go back one
+    index -= 1;
+
+    return cars[index].copy();
+  }
+
+  //!-------------------GeneticAlgorithm----------------------//
+
+
+
+
   //-------------------Create/Edit Map-------------------------//
   showEditButtons = (btnDraw, btnSave, btnCancel, btnReset) => {
     document.getElementById("btnDraw").style.display = btnDraw ? "" : "none";
@@ -435,14 +586,14 @@ class App extends React.Component {
     var relativeY = e.clientY - rect.top;
 
     this.mouseUpLocation = {
-      x:relativeX,
-      y:relativeY
+      x: relativeX,
+      y: relativeY
     };
 
     var ctx = this.canvas.current.getContext("2d");
     ctx.beginPath();
-    ctx.moveTo(this.mouseDownLocation.x,this.mouseDownLocation.y);
-    ctx.lineTo(this.mouseUpLocation.x,this.mouseUpLocation.y);
+    ctx.moveTo(this.mouseDownLocation.x, this.mouseDownLocation.y);
+    ctx.lineTo(this.mouseUpLocation.x, this.mouseUpLocation.y);
     ctx.lineWidth = this.lineWidth;
     ctx.stroke();
     ctx.lineWidth = 1;
@@ -463,8 +614,8 @@ class App extends React.Component {
     var relativeY = e.clientY - rect.top;
 
     this.mouseDownLocation = {
-      x:relativeX,
-      y:relativeY
+      x: relativeX,
+      y: relativeY
     };
   }
 
@@ -478,12 +629,13 @@ class App extends React.Component {
     this.draw();
 
     ctx.beginPath();
-    ctx.moveTo(this.mouseDownLocation.x,this.mouseDownLocation.y);
-    ctx.lineTo(relativeX,relativeY);
+    ctx.moveTo(this.mouseDownLocation.x, this.mouseDownLocation.y);
+    ctx.lineTo(relativeX, relativeY);
     ctx.lineWidth = this.lineWidth;
     ctx.stroke();
     ctx.lineWidth = 1;
   }
+  //-------------------!Create/Edit Map-------------------------//
 
   render() {
     return (
